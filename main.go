@@ -161,12 +161,55 @@ func notifyDiscord(webhookURL, realmName string, nowOnline bool) error {
 	return nil
 }
 
+func notifyError(webhookURL, message string) error {
+	if webhookURL == "" {
+		return nil
+	}
+	payload := map[string]any{
+		"username":   "Realm Watcher",
+		"avatar_url": "https://wow.zamimg.com/images/wow/icons/large/trade_engineering.jpg",
+		"embeds": []map[string]any{
+			{
+				"author": map[string]any{
+					"name":     fmt.Sprintf("realm-watcher failed: %s", message),
+					"icon_url": "https://wow.zamimg.com/images/wow/icons/large/inv_misc_enggizmos_27.jpg",
+				},
+				"color": 0xe74c3c,
+			},
+		},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post(webhookURL, "application/json", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("error webhook returned %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
 func main() {
 	_ = godotenv.Load()
 
+	errorWebhookURL := os.Getenv("ERROR_WEBHOOK_URL")
+	fatal := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		log.Print(msg)
+		if err := notifyError(errorWebhookURL, msg); err != nil {
+			log.Printf("notify error webhook: %v", err)
+		}
+		os.Exit(1)
+	}
+
 	realmSlug := os.Getenv("REALM_SLUG")
 	if realmSlug == "" {
-		log.Fatal("REALM_SLUG env var is required (e.g. 'ragnaros')")
+		fatal("REALM_SLUG env var is required (e.g. 'ragnaros')")
 	}
 	region := os.Getenv("REGION")
 	if region == "" {
@@ -174,7 +217,7 @@ func main() {
 	}
 	webhookURL := os.Getenv("DISCORD_WEBHOOK_URL")
 	if webhookURL == "" {
-		log.Fatal("DISCORD_WEBHOOK_URL env var is required")
+		fatal("DISCORD_WEBHOOK_URL env var is required")
 	}
 	stateFile := os.Getenv("STATE_FILE")
 	if stateFile == "" {
@@ -186,17 +229,17 @@ func main() {
 	}
 	persistedQueryHash := os.Getenv("PERSISTED_QUERY_HASH")
 	if persistedQueryHash == "" {
-		log.Fatal("PERSISTED_QUERY_HASH env var is required")
+		fatal("PERSISTED_QUERY_HASH env var is required")
 	}
 
 	realms, err := fetchRealms(context.Background(), graphqlURL, persistedQueryHash, region)
 	if err != nil {
-		log.Fatalf("fetch realms: %v", err)
+		fatal("fetch realms: %v", err)
 	}
 
 	r, found := findRealm(realms, realmSlug)
 	if !found {
-		log.Fatalf("realm with slug %q not found in region %q", realmSlug, region)
+		fatal("realm with slug %q not found in region %q", realmSlug, region)
 	}
 
 	lastOnline, hadState := readLastState(stateFile)
@@ -205,7 +248,7 @@ func main() {
 
 	if !hadState || lastOnline != r.Online {
 		if err := notifyDiscord(webhookURL, r.Name, r.Online); err != nil {
-			log.Fatalf("notify discord: %v", err)
+			fatal("notify discord: %v", err)
 		}
 		log.Println("status changed, discord notified")
 	} else {
@@ -213,6 +256,6 @@ func main() {
 	}
 
 	if err := writeLastState(stateFile, r.Online); err != nil {
-		log.Fatalf("write state: %v", err)
+		fatal("write state: %v", err)
 	}
 }

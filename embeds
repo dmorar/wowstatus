@@ -1,0 +1,27 @@
+"embeds": []map[string]any{
+			{
+				"author": map[string]any{
+					"name":     "bob esponja",
+					"icon_url": "https://wow.zamimg.com/images/wow/icons/large/inv_alchemy_90_stone_green.jpg",
+				},
+				"title":       "test title",
+				"url":         "https://discord.com/safety/using-webhooks-and-embeds",
+				"description": fmt.Sprintf("%s **%s** — %s", dot, realmName, status),
+				"fields": []map[string]any{
+					{"name": "Region", "value": "US", "inline": true},
+					{"name": "Category", "value": "United States", "inline": true},
+				},
+				"color": color,
+
+				"thumbnail": map[string]any{
+					"url": "https://blz-contentstack-images.akamaized.net/v3/assets/blt3452e3b114fab0cd/blt8d3cecf84f200ed6/68a4ed936a17f5492299906f/midnight-logo-1.png",
+				},
+				"image": map[string]any{
+					"url": "https://wow.zamimg.com/images/wow/icons/large/inv_alchemy_90_stone_green.jpg",
+				},
+				"footer": map[string]any{
+					"text":     "test footer",
+					"icon_url": "https://render.worldofwarcraft.com/us/icons/56/inv_cosmicvoid_nova.jpg",
+				},
+				"timestamp": time.Now().Format(time.RFC3339),
+			},
