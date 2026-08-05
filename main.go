@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"cloud.google.com/go/storage"
 	"github.com/joho/godotenv"
 )
 
@@ -108,33 +107,22 @@ func findRealm(realms []realm, slug string) (realm, bool) {
 	return realm{}, false
 }
 
-// --- state persistence (Cloud Storage, since Cloud Run Jobs containers are ephemeral) ---
+// --- state persistence (local file for now; swap for Cloud Storage on Cloud Run Jobs) ---
 
-func readLastState(ctx context.Context, client *storage.Client, bucket, object string) (online bool, found bool) {
-	r, err := client.Bucket(bucket).Object(object).NewReader(ctx)
-	if err != nil {
-		return false, false
-	}
-	defer r.Close()
-
-	data, err := io.ReadAll(r)
+func readLastState(path string) (online bool, found bool) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return false, false
 	}
 	return strings.TrimSpace(string(data)) == "true", true
 }
 
-func writeLastState(ctx context.Context, client *storage.Client, bucket, object string, online bool) error {
+func writeLastState(path string, online bool) error {
 	val := "false"
 	if online {
 		val = "true"
 	}
-	w := client.Bucket(bucket).Object(object).NewWriter(ctx)
-	if _, err := w.Write([]byte(val)); err != nil {
-		w.Close()
-		return err
-	}
-	return w.Close()
+	return os.WriteFile(path, []byte(val), 0644)
 }
 
 // --- discord ---
@@ -192,10 +180,6 @@ func main() {
 	if stateFile == "" {
 		stateFile = "last_state.txt"
 	}
-	stateBucket := os.Getenv("STATE_BUCKET")
-	if stateBucket == "" {
-		log.Fatal("STATE_BUCKET env var is required")
-	}
 	graphqlURL := os.Getenv("GRAPHQL_URL")
 	if graphqlURL == "" {
 		graphqlURL = defaultGraphqlURL
@@ -205,15 +189,7 @@ func main() {
 		log.Fatal("PERSISTED_QUERY_HASH env var is required")
 	}
 
-	ctx := context.Background()
-
-	storageClient, err := storage.NewClient(ctx)
-	if err != nil {
-		log.Fatalf("create storage client: %v", err)
-	}
-	defer storageClient.Close()
-
-	realms, err := fetchRealms(ctx, graphqlURL, persistedQueryHash, region)
+	realms, err := fetchRealms(context.Background(), graphqlURL, persistedQueryHash, region)
 	if err != nil {
 		log.Fatalf("fetch realms: %v", err)
 	}
@@ -223,7 +199,7 @@ func main() {
 		log.Fatalf("realm with slug %q not found in region %q", realmSlug, region)
 	}
 
-	lastOnline, hadState := readLastState(ctx, storageClient, stateBucket, stateFile)
+	lastOnline, hadState := readLastState(stateFile)
 
 	log.Printf("realm=%s online=%v (hadState=%v, previous known=%v )", r.Name, r.Online, hadState, lastOnline)
 
@@ -236,7 +212,7 @@ func main() {
 		log.Println("no change, skipping notification")
 	}
 
-	if err := writeLastState(ctx, storageClient, stateBucket, stateFile, r.Online); err != nil {
+	if err := writeLastState(stateFile, r.Online); err != nil {
 		log.Fatalf("write state: %v", err)
 	}
 }
