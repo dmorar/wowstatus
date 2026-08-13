@@ -17,13 +17,12 @@ import (
 
 const defaultGraphqlURL = "https://worldofwarcraft.blizzard.com/en-us/graphql"
 
+// offlineThreshold is how many offline realms out of the whole region counts
+// as "servers down" rather than isolated, individual realm blips.
+const offlineThreshold = 30
+
 type realm struct {
-	Name       string `json:"name"`
-	Slug       string `json:"slug"`
-	Online     bool   `json:"online"`
-	Population *struct {
-		Name string `json:"name"`
-	} `json:"population"`
+	Online bool `json:"online"`
 }
 
 type graphqlResponse struct {
@@ -98,15 +97,6 @@ func fetchRealms(ctx context.Context, graphqlURL, persistedQueryHash, region str
 	return gqlResp.Data.Realms, nil
 }
 
-func findRealm(realms []realm, slug string) (realm, bool) {
-	for _, r := range realms {
-		if r.Slug == slug {
-			return r, true
-		}
-	}
-	return realm{}, false
-}
-
 // --- state persistence (local file for now; swap for Cloud Storage on Cloud Run Jobs) ---
 
 func readLastState(path string) (online bool, found bool) {
@@ -127,10 +117,10 @@ func writeLastState(path string, online bool) error {
 
 // --- discord ---
 
-func notifyDiscord(webhookURL, realmName string, nowOnline bool) error {
-	dot, status, color := "https://wow.zamimg.com/images/wow/icons/large/inv_alchemy_90_stone_red.jpg", "OFFLINE", 0xe74c3c
-	if nowOnline {
-		dot, status, color = "https://wow.zamimg.com/images/wow/icons/large/inv_alchemy_90_stone_green.jpg", "ONLINE", 0x2ecc71
+func notifyDiscord(webhookURL string, allOnline bool) error {
+	dot, status, color := "https://wow.zamimg.com/images/wow/icons/large/inv_alchemy_90_stone_red.jpg", "Servers Down", 0xe74c3c
+	if allOnline {
+		dot, status, color = "https://wow.zamimg.com/images/wow/icons/large/inv_alchemy_90_stone_green.jpg", "Servers Online", 0x2ecc71
 	}
 	payload := map[string]any{
 		"username":   "Realm Watcher",
@@ -138,7 +128,7 @@ func notifyDiscord(webhookURL, realmName string, nowOnline bool) error {
 		"embeds": []map[string]any{
 			{
 				"author": map[string]any{
-					"name":     fmt.Sprintf("%s — %s", realmName, status),
+					"name":     status,
 					"icon_url": dot,
 				},
 				"color": color,
@@ -207,10 +197,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	realmSlug := os.Getenv("REALM_SLUG")
-	if realmSlug == "" {
-		fatal("REALM_SLUG env var is required (e.g. 'ragnaros')")
-	}
 	region := os.Getenv("REGION")
 	if region == "" {
 		region = "us"
@@ -237,17 +223,21 @@ func main() {
 		fatal("fetch realms: %v", err)
 	}
 
-	r, found := findRealm(realms, realmSlug)
-	if !found {
-		fatal("realm with slug %q not found in region %q", realmSlug, region)
+	offlineCount := 0
+	for _, r := range realms {
+		if !r.Online {
+			offlineCount++
+		}
 	}
+	onlineCount := len(realms) - offlineCount
+	allOnline := offlineCount <= offlineThreshold
 
-	lastOnline, hadState := readLastState(stateFile)
+	lastAllOnline, hadState := readLastState(stateFile)
 
-	log.Printf("realm=%s online=%v (hadState=%v, previous known=%v )", r.Name, r.Online, hadState, lastOnline)
+	log.Printf("online=%d offline=%d total=%d allOnline=%v (hadState=%v, previous known=%v)", onlineCount, offlineCount, len(realms), allOnline, hadState, lastAllOnline)
 
-	if !hadState || lastOnline != r.Online {
-		if err := notifyDiscord(webhookURL, r.Name, r.Online); err != nil {
+	if !hadState || lastAllOnline != allOnline {
+		if err := notifyDiscord(webhookURL, allOnline); err != nil {
 			fatal("notify discord: %v", err)
 		}
 		log.Println("status changed, discord notified")
@@ -255,7 +245,7 @@ func main() {
 		log.Println("no change, skipping notification")
 	}
 
-	if err := writeLastState(stateFile, r.Online); err != nil {
+	if err := writeLastState(stateFile, allOnline); err != nil {
 		fatal("write state: %v", err)
 	}
 }
